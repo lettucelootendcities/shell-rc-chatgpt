@@ -11,6 +11,8 @@ A web app used to control shell rc cars. Right now supports only the old cars.
 - Lights working (new cars only)
 - Turbo working
 - Battery reading
+- Vechicle recognition
+- Debug console
 
 # Roadmap (kinda empty)
 - new cars suppurt
