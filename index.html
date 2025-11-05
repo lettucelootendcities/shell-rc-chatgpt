@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Shell RC — fixed control</title>
+<style>
+  /* compact styles (dark + blue glow) */
+  :root { --bg:#05060a; --accent:#0a84ff; --muted:#9aa3b2; }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#03040a,#071022);font-family:-apple-system,Segoe UI,Roboto,Helvetica;color:#e6eef8}
+  .app{padding:22px;display:flex;gap:18px;max-width:980px;margin:20px auto}
+  .panel{background:rgba(255,255,255,0.02);padding:18px;border-radius:14px;border:1px solid rgba(255,255,255,0.03)}
+  .left{width:320px}
+  h1{color:var(--accent);margin:0 0 8px 0}
+  .connectBtn{background:linear-gradient(180deg,var(--accent),#2b9bff);color:#fff;padding:10px 14px;border-radius:12px;border:none;cursor:pointer;font-weight:700}
+  .statusBadge{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,0.02);display:inline-block;font-weight:700}
+  .batteryBar{height:14px;background:rgba(255,255,255,0.04);border-radius:10px;overflow:hidden}
+  .batteryFill{height:100%;width:0%;background:linear-gradient(90deg,#34c759,#0ad0ff);transition:width .25s}
+  .right{flex:1;display:flex;flex-direction:column;gap:12px}
+  .sticks{display:flex;gap:12px;justify-content:space-between}
+  canvas{background:transparent;border-radius:999px;touch-action:none}
+  .ctrlRow{display:flex;gap:8px;justify-content:flex-end}
+  .ctrlBtn{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:rgba(255,255,255,0.02);color:var(--accent);font-weight:700;cursor:pointer}
+  .ctrlBtn.active{background:linear-gradient(180deg,#0df,#08a);color:white;box-shadow:0 6px 18px rgba(10,132,255,0.09)}
+  .debug{position:fixed;right:12px;bottom:12px;width:340px;background:rgba(0,0,0,0.6);padding:8px;border-radius:8px;border:1px solid rgba(10,132,255,0.06);font-family:monospace;font-size:12px;color:#bfefff}
+  .dbgHeader{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .dbgLog{max-height:160px;overflow:auto;margin:0;padding:6px;background:transparent;color:#bfefff}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="panel left">
+    <h1>vechicular device controlller app</h1>
+    <div style="margin-bottom:10px;color:#9fbff0">  </div>
+
+    <button id="connectBtn" class="connectBtn">Connect</button>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+      <div class="statusBadge" id="connBadge">Disconnected</div>
+      <div class="statusBadge" id="vehBadge">Vehicle: connect to continue</div>
+    </div>
+
+    <div style="margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:13px;color:#9aa3b2">Battery</div>
+        <div id="batteryText" style="font-weight:800">--%</div>
+      </div>
+      <div class="batteryBar" style="margin-top:8px">
+        <div id="batteryFill" class="batteryFill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <div style="font-size:13px;color:#9aa3b2">State</div>
+      <div id="stateLabel" style="font-weight:800;margin-top:6px">Idle</div>
+    </div>
+
+    <div style="margin-top:18px;color:#9aa3b2;font-size:13px">    </div>
+  </div>
+
+  <div class="panel right">
+    <div class="sticks">
+      <div style="flex:1;text-align:center">
+        <div style="font-size:13px;color:#9aa3b2;margin-bottom:6px">Throttle</div>
+        <canvas id="leftCanvas" width="200" height="200"></canvas>
+      </div>
+      <div style="flex:1;text-align:center">
+        <div style="font-size:13px;color:#9aa3b2;margin-bottom:6px">Steering</div>
+        <canvas id="rightCanvas" width="200" height="200"></canvas>
+      </div>
+    </div>
+
+    <div class="ctrlRow">
+      <button id="turboBtn" class="ctrlBtn">Turbo</button>
+      <button id="lightsBtn" class="ctrlBtn">Lights</button>
+    </div>
+  </div>
+</div>
+
+<div class="debug" id="debug">
+  <div class="dbgHeader"><div style="color:var(--accent);font-weight:800">Debug</div><button id="dbgClear" style="background:transparent;border:none;color:#9aa3b2;cursor:pointer">Clear</button></div>
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="flex:1">Conn: <span id="dbgConn">no</span></div>
+    <div style="flex:1">Veh: <span id="dbgVeh">--</span></div>
+  </div>
+  <pre id="dbgLog" class="dbgLog">log init.</pre>
+</div>
+
+<script>
+/* ===========================
+   FIXED Shell RC client
+   - Ensures actual Uint8Array writes
+   - Immediate send + streaming for hold
+   - Correct joystick -> left steering fix
+   - Logging and fallback writeValue
+   =========================== */
+
+/* --- Config --- */
+const SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+const CONTROL_UUID = 'd44bc439-abfd-45a2-b575-925416129600';
+const BATTERY_UUID = 'd44bc439-abfd-45a2-b575-925416129601';
+const AES_KEY = new Uint8Array([0x34,0x52,0x2a,0x5b,0x7a,0x6e,0x49,0x2c,0x08,0x09,0x0a,0x9d,0x8d,0x2a,0x23,0xf8]);
+const DEADZONE = 0.2;
+const STREAM_INTERVAL = 100; // ms
+
+/* --- UI refs --- */
+const connectBtn = document.getElementById('connectBtn');
+const connBadge = document.getElementById('connBadge');
+const vehBadge = document.getElementById('vehBadge');
+const batteryText = document.getElementById('batteryText');
+const batteryFill = document.getElementById('batteryFill');
+const stateLabel = document.getElementById('stateLabel');
+const dbgLog = document.getElementById('dbgLog');
+const dbgConn = document.getElementById('dbgConn');
+const dbgVeh = document.getElementById('dbgVeh');
+const dbgClear = document.getElementById('dbgClear');
+const turboBtn = document.getElementById('turboBtn');
+const lightsBtn = document.getElementById('lightsBtn');
+
+/* --- Debug helpers --- */
+function logDbg(s) {
+  const t = new Date().toLocaleTimeString();
+  dbgLog.textContent = `${t} — ${s}\n` + dbgLog.textContent;
+  console.log(s);
+}
+dbgClear.addEventListener('click', ()=> dbgLog.textContent = '');
+
+/* --- Command hex table (full 16-byte hex strings) ---
+   These are exact 16-byte arrays taken from the Brandbase listing earlier.
+*/
+const COMMAND_HEX = {
+  idle:            "025e695a48ff2a438ca680f83e04e45d",
+  forward:         "29609c664852cff1b0f0cbb98014bd2c",
+  forwardTurbo:    "e65567da8e6c560d09d3733a7f47ff06",
+  backward:        "03209909ba9da1c8b986163c6d484655",
+  backwardTurbo:   "cec2ff1d7acc163cd13b7e6153ad5c45",
+  left:            "51382112135cccdb46cf8921b705499a",
+  right:           "1b5769cdf13e8ab627080ff3cefc3bc0",
+  forwardLeft:     "9928e590dfe821485f414fbb633d5c4e",
+  forwardRight:    "0f2ce56662d4fd9d32a44f102bf20aa7",
+  backwardLeft:    "98ce981d58d115afe11960bf4613925c",
+  backwardRight:   "f2520fba3144fb11468fe080c6c2c23c",
+  forwardTurboLeft:  "592381c943a417ca1bc3b59400e0fc12",
+  forwardTurboRight: "fb976fba04af87022226ec50ae82f8c4",
+  backwardTurboLeft: "d54ad55857d327745f141dd00d671595",
+  backwardTurboRight:"80dfb2165f3260f1d9837750f43a43da"
+};
+
+/* convert hex -> Uint8Array */
+function hexToBytes(hex) {
+  const out = new Uint8Array(16);
+  for (let i=0;i<16;i++) out[i]=parseInt(hex.substr(i*2,2),16);
+  return out;
+}
+
+/* short key map used in decideCommandKey */
+const CMD_MAP = {
+  idle: 'idle', f:'forward', f_t:'forwardTurbo', b:'backward', b_t:'backwardTurbo',
+  l:'left', r:'right', f_l:'forwardLeft', f_r:'forwardRight',
+  b_l:'backwardLeft', b_r:'backwardRight', f_tl:'forwardTurboLeft', f_tr:'forwardTurboRight',
+  b_tl:'backwardTurboLeft', b_tr:'backwardTurboRight'
+};
+
+/* --- AES decrypt functions for battery (AES-128-ECB) ---
+   (small single-block decrypt implementation similar to earlier)
+   We only call aes128_ecb_decrypt once per battery notification.
+   If battery decryption fails, we show raw bytes in debug.
+*/
+let _aes_tables = null;
+function aes_init() {
+  if (_aes_tables) return _aes_tables;
+  const pow = new Uint8Array(256), log = new Uint8Array(256);
+  let x = 1;
+  for (let i=0;i<256;i++){ pow[i]=x; log[x]=i; x = (x<<1) ^ (x & 0x80 ? 0x11b : 0); }
+  const sbox = new Uint8Array(256), invsbox = new Uint8Array(256);
+  sbox[0]=0x63; invsbox[0x63]=0;
+  for (let i=1;i<256;i++){
+    let inv = pow[255-log[i]];
+    let y = inv, t=inv;
+    y = (t<<1) ^ (t & 0x80 ? 0x11b : 0);
+    t = (y ^ (y<<1) ^ (y<<2) ^ (y<<3) ^ (y<<4)) & 0xFF;
+    sbox[i] = (t ^ 0x63) & 0xFF;
+    invsbox[sbox[i]] = i;
+  }
+  const Rcon = new Uint8Array(11); Rcon[0]=0; let r=1; for (let i=1;i<11;i++){ Rcon[i]=r; r=(r<<1) ^ (r & 0x80 ? 0x11b : 0); }
+  _aes_tables = { sbox, invsbox, Rcon }; return _aes_tables;
+}
+function keyExpansion(keyBytes) {
+  const tk = new Uint8Array(176); tk.set(keyBytes,0);
+  const { sbox, Rcon } = aes_init();
+  let generated = 16, rconIter = 1; const temp = new Uint8Array(4);
+  while (generated < 176) {
+    for (let i=0;i<4;i++) temp[i]=tk[generated-4+i];
+    if (generated % 16 === 0) {
+      const t = temp[0];
+      temp[0] = sbox[temp[1]] ^ Rcon[rconIter];
+      temp[1] = sbox[temp[2]];
+      temp[2] = sbox[temp[3]];
+      temp[3] = sbox[t];
+      rconIter++;
+    } else {
+      for (let i=0;i<4;i++) temp[i] = sbox[temp[i]];
+    }
+    for (let i=0;i<4;i++){ tk[generated] = tk[generated-16] ^ temp[i]; generated++; }
+  }
+  return tk;
+}
+function gfMul(a,b) {
+  let p=0;
+  for (let i=0;i<8;i++){
+    if (b & 1) p ^= a;
+    const hi = a & 0x80;
+    a = (a << 1) & 0xFF;
+    if (hi) a ^= 0x1b;
+    b >>= 1;
+  }
+  return p;
+}
+function aesDecryptBlock(block, roundKeys) {
+  const { invsbox } = aes_init();
+  const state = new Uint8Array(block);
+  const addRoundKey = (r) => { const off = r*16; for (let i=0;i<16;i++) state[i] ^= roundKeys[off+i]; };
+  const invShiftRows = () => {
+    let t = state[1]; state[1]=state[13]; state[13]=state[9]; state[9]=state[5]; state[5]=t;
+    t=state[2]; let t2=state[10]; state[2]=t2; state[10]=t;
+    t=state[6]; t2=state[14]; state[6]=t2; state[14]=t;
+    t=state[3]; state[3]=state[7]; state[7]=state[11]; state[11]=state[15]; state[15]=t;
+  };
+  const invSubBytes = () => { for (let i=0;i<16;i++) state[i]=invsbox[state[i]]; };
+  const invMixCols = () => {
+    for (let c=0;c<4;c++){
+      const i=c*4; const a0=state[i],a1=state[i+1],a2=state[i+2],a3=state[i+3];
+      state[i]   = gfMul(0x0e,a0) ^ gfMul(0x0b,a1) ^ gfMul(0x0d,a2) ^ gfMul(0x09,a3);
+      state[i+1] = gfMul(0x09,a0) ^ gfMul(0x0e,a1) ^ gfMul(0x0b,a2) ^ gfMul(0x0d,a3);
+      state[i+2] = gfMul(0x0d,a0) ^ gfMul(0x09,a1) ^ gfMul(0x0e,a2) ^ gfMul(0x0b,a3);
+      state[i+3] = gfMul(0x0b,a0) ^ gfMul(0x0d,a1) ^ gfMul(0x09,a2) ^ gfMul(0x0e,a3);
+    }
+  };
+  const Nr = 10;
+  addRoundKey(Nr);
+  for (let round=Nr-1; round>=1; round--) {
+    invShiftRows(); invSubBytes(); addRoundKey(round); invMixCols();
+  }
+  invShiftRows(); invSubBytes(); addRoundKey(0);
+  return state;
+}
+function aes128_ecb_decrypt(block16, keyBytes) {
+  const rk = keyExpansion(keyBytes);
+  return aesDecryptBlock(block16, rk);
+}
+
+/* --- BLE state --- */
+let bleDevice = null;
+let bleControlChar = null;
+let bleBatteryChar = null;
+let streamingTimer = null;
+
+/* --- Move flags and turbo/lights --- */
+let move = { f:false, b:false, l:false, r:false };
+let turbo = false, lights = false;
+
+/* --- Device recognition helper --- */
+function recognizeDeviceName(name) {
+  if (!name) return "Unknown Vehicle";
+  const u = name.toUpperCase();
+  if (u.startsWith("QCAR-043666")) return "Nissan Formula E";
+  if (u.startsWith("QCAR-196B53")) return "BMW M1";
+  const m = u.match(/^QCAR-([0-9A-F]{4,8})/);
+  return m ? ("QCAR " + m[1]) : name;
+}
+
+/* --- Connect handler --- */
+connectBtn.addEventListener('click', async () => {
+  try {
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'Pairing…';
+    logDbg('Requesting BLE device (QCAR filter)');
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'QCAR' }],
+      optionalServices: [SERVICE_UUID]
+    });
+    bleDevice = device;
+    const vname = device.name || 'Unknown';
+    vehBadge.textContent = 'Vehicle: ' + recognizeDeviceName(vname);
+    dbgVeh.textContent = recognizeDeviceName(vname);
+    logDbg('Selected: ' + vname);
+
+    const server = await device.gatt.connect();
+    logDbg('Connected GATT');
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    logDbg('Got service; getting characteristics');
+    bleControlChar = await service.getCharacteristic(CONTROL_UUID);
+    try {
+      bleBatteryChar = await service.getCharacteristic(BATTERY_UUID);
+      await bleBatteryChar.startNotifications();
+      bleBatteryChar.addEventListener('characteristicvaluechanged', onBatteryNotif);
+      logDbg('Battery notifications enabled');
+    } catch (e) {
+      logDbg('Battery char not found or notifications failed: ' + e);
+    }
+
+    connBadge.textContent = 'Connected';
+    dbgConn.textContent = 'yes';
+    connectBtn.textContent = 'Connected';
+    connectBtn.style.background = '#34c759';
+    startStreaming();
+    // reconnect auto
+    device.addEventListener('gattserverdisconnected', async () => {
+      logDbg('Device disconnected; attempting reconnect...');
+      connBadge.textContent = 'Disconnected';
+      dbgConn.textContent = 'no';
+      try {
+        await reconnectDevice();
+      } catch (err) {
+        logDbg('Reconnect failed: ' + err);
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'Connect to Car';
+      }
+    });
+  } catch (err) {
+    logDbg('Connect failed: ' + (err && err.message ? err.message : err));
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect to Car';
+  }
+});
+
+/* --- Reconnect helper --- */
+async function reconnectDevice() {
+  if (!bleDevice) throw new Error('no device');
+  const server = await bleDevice.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE_UUID);
+  bleControlChar = await service.getCharacteristic(CONTROL_UUID);
+  try {
+    bleBatteryChar = await service.getCharacteristic(BATTERY_UUID);
+    await bleBatteryChar.startNotifications();
+    bleBatteryChar.addEventListener('characteristicvaluechanged', onBatteryNotif);
+  } catch (e) { logDbg('Battery re-enable failed: ' + e); }
+  connBadge.textContent = 'Connected';
+  dbgConn.textContent = 'yes';
+  startStreaming();
+  logDbg('Reconnected');
+}
+
+/* --- Battery notification handler --- */
+function onBatteryNotif(e) {
+  try {
+    const dv = e.target.value;
+    const block = new Uint8Array(16);
+    for (let i=0;i<16;i++) block[i]=dv.getUint8(i);
+    // decrypt
+    const dec = aes128_ecb_decrypt(block, AES_KEY);
+    const raw = dec[4]; // byte index 4
+    const pct = Math.max(0, Math.min(100, Math.round((raw/255)*100)));
+    batteryText.textContent = pct + '%';
+    batteryFill.style.width = pct + '%';
+    logDbg(`Battery raw:${raw} -> ${pct}%`);
+  } catch (err) {
+    logDbg('Battery decrypt error: ' + err);
+  }
+}
+
+/* --- Send command (immediate send + streaming) --- */
+async function sendCommandNow(shortKey) {
+  // shortKey is like 'f','b','l','r','f_l' etc.
+  const mapped = CMD_MAP[shortKey];
+  if (!mapped) {
+    logDbg('Unknown shortKey: ' + shortKey);
+    return;
+  }
+  const hex = COMMAND_HEX[mapped];
+  if (!hex) { logDbg('No hex for ' + mapped); return; }
+  const bytes = hexToBytes(hex);
+  if (!bleControlChar) { logDbg('Control characteristic not ready'); return; }
+  try {
+    // ensure it's a Uint8Array (some older browsers/implementations need DataView)
+    await bleControlChar.writeValueWithoutResponse(bytes);
+    logDbg('Sent ' + shortKey + ' -> ' + mapped);
+  } catch (err) {
+    logDbg('writeValueWithoutResponse failed: ' + err + ' — trying writeValue() fallback');
+    try {
+      await bleControlChar.writeValue(bytes); // fallback if device requires response
+      logDbg('Fallback writeValue succeeded for ' + shortKey);
+    } catch (err2) {
+      logDbg('Fallback writeValue failed: ' + err2);
+      // attempt reconnect
+      try { await reconnectDevice(); } catch (re) { logDbg('Reconnect after write failed: ' + re); }
+    }
+  }
+}
+
+/* Decide shortKey from move + turbo (same mapping as before) */
+function decideCommandKeyNow() {
+  if (move.f && move.l) return turbo ? 'f_tl' : 'f_l';
+  if (move.f && move.r) return turbo ? 'f_tr' : 'f_r';
+  if (move.b && move.l) return turbo ? 'b_tl' : 'b_l';
+  if (move.b && move.r) return turbo ? 'b_tr' : 'b_r';
+  if (move.f) return turbo ? 'f_t' : 'f';
+  if (move.b) return turbo ? 'b_t' : 'b';
+  if (move.l) return 'l';
+  if (move.r) return 'r';
+  return 'idle';
+}
+function startStreaming() {
+  if (streamingTimer) clearInterval(streamingTimer);
+  streamingTimer = setInterval(() => {
+    const key = decideCommandKeyNow();
+    sendCommandNow(key);
+    stateLabel.textContent = key.toUpperCase();
+  }, STREAM_INTERVAL);
+}
+function stopStreaming() { if (streamingTimer) { clearInterval(streamingTimer); streamingTimer=null; } }
+
+/* --- Joystick implementation (touch + mouse) --- */
+function createStick(canvasId, role) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  const center = { x:w/2, y:h/2 };
+  const maxR = Math.min(w,h)/2 * 0.6;
+  let knob = { x:center.x, y:center.y, r:Math.min(w,h)*0.11 };
+  let active = false;
+  let pointerId = null;
+
+  function draw() {
+    ctx.clearRect(0,0,w,h);
+    // ring
+    ctx.beginPath(); ctx.arc(center.x, center.y, maxR+8, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(255,255,255,0.02)"; ctx.fill();
+    ctx.beginPath(); ctx.arc(center.x, center.y, maxR, 0, Math.PI*2);
+    ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth=2; ctx.stroke();
+    // knob
+    const g = ctx.createLinearGradient(knob.x - knob.r, knob.y - knob.r, knob.x + knob.r, knob.y + knob.r);
+    g.addColorStop(0,'#0a84ff'); g.addColorStop(1,'#0570d9');
+    ctx.beginPath(); ctx.arc(knob.x, knob.y, knob.r, 0, Math.PI*2);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.beginPath(); ctx.arc(knob.x - knob.r*0.25, knob.y - knob.r*0.25, knob.r*0.5, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(255,255,255,0.18)"; ctx.fill();
+  }
+  draw();
+
+  function handleMove(clientX, clientY) {
+    const rect = c.getBoundingClientRect();
+    const dx = clientX - rect.left - center.x;
+    const dy = clientY - rect.top - center.y;
+    const dist = Math.min(Math.sqrt(dx*dx + dy*dy), maxR);
+    const ang = Math.atan2(dy,dx);
+    const nx = Math.cos(ang) * dist;
+    const ny = Math.sin(ang) * dist;
+    knob.x = center.x + nx; knob.y = center.y + ny;
+    // normalized -1..1
+    const vx = nx / maxR; const vy = ny / maxR;
+    // role: 'left' -> vy controls forward/reverse (up negative)
+    if (role === 'left') {
+      move.f = vy < -DEADZONE; move.b = vy > DEADZONE;
+    } else {
+      move.l = vx < -DEADZONE; move.r = vx > DEADZONE;
+    }
+    // immediate send so it feels responsive
+    const key = decideCommandKeyNow();
+    sendCommandNow(key);
+    stateLabel.textContent = key.toUpperCase();
+    draw();
+  }
+
+  function reset() {
+    // animate knob to center smoothly
+    const targetX = center.x, targetY = center.y;
+    let anim = setInterval(() => {
+      knob.x += (targetX - knob.x) * 0.24;
+      knob.y += (targetY - knob.y) * 0.24;
+      draw();
+      if (Math.abs(knob.x-targetX) + Math.abs(knob.y-targetY) < 1) {
+        knob.x = targetX; knob.y = targetY; draw(); clearInterval(anim);
+      }
+    }, 16);
+    if (role === 'left') move.f = move.b = false; else move.l = move.r = false;
+    sendCommandNow(decideCommandKeyNow());
+  }
+
+  c.addEventListener('pointerdown', (ev) => {
+    active = true; pointerId = ev.pointerId; c.setPointerCapture(pointerId); handleMove(ev.clientX, ev.clientY);
+  });
+  c.addEventListener('pointermove', (ev) => { if (!active || ev.pointerId !== pointerId) return; handleMove(ev.clientX, ev.clientY); });
+  c.addEventListener('pointerup', (ev) => { if (ev.pointerId !== pointerId) return; active=false; c.releasePointerCapture(pointerId); pointerId=null; reset(); });
+  c.addEventListener('pointercancel', ()=> { active=false; pointerId=null; reset(); });
+
+  // expose a method to set axes visually (used by gamepad to sync visuals)
+  function setAxes(nx, ny) {
+    // nx,ny in -1..1 range
+    knob.x = center.x + nx * maxR;
+    knob.y = center.y + ny * maxR;
+    draw();
+  }
+
+  return { setAxes, reset };
+}
+
+const leftStick = createStick('leftCanvas','left');
+const rightStick = createStick('rightCanvas','right');
+
+/* --- Gamepad polling & sync (visual) --- */
+function pollGamepads() {
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  const gp = gps[0];
+  if (gp) {
+    // standard mapping: axes[0]=LX, axes[1]=LY, axes[2]=RX, axes[3]=RY
+    const lx = gp.axes[0] || 0;
+    const ly = gp.axes[1] || 0;
+    const rx = gp.axes[2] || 0;
+    // sync visuals: leftStick (x,y), rightStick (x,0)
+    leftStick.setAxes(lx, ly);   // left stick visual matches controller
+    rightStick.setAxes(rx, 0);
+    // update movement flags
+    move.f = ly < -DEADZONE; move.b = ly > DEADZONE;
+    move.l = rx < -DEADZONE; move.r = rx > DEADZONE;
+    // buttons: left bumper (4) turbo hold, right bumper (5) toggle lights on press
+    const lb = !!(gp.buttons[4] && gp.buttons[4].pressed);
+    const rb = !!(gp.buttons[5] && gp.buttons[5].pressed);
+    turbo = lb;
+    turboBtn.classList.toggle('active', turbo);
+    // toggle lights on rising edge
+    if (rb && !lightsPressedPrev) { lights = !lights; lightsBtn.classList.toggle('active', lights); logDbg('Lights toggled by controller -> ' + lights); }
+    lightsPressedPrev = rb;
+    // send immediate
+    const k = decideCommandKeyNow();
+    sendCommandNow(k);
+    stateLabel.textContent = k.toUpperCase();
+  }
+  requestAnimationFrame(pollGamepads);
+}
+let lightsPressedPrev = false;
+pollGamepads();
+
+/* --- Buttons --- */
+turboBtn.addEventListener('click', ()=> { turbo = !turbo; turboBtn.classList.toggle('active', turbo); logDbg('Turbo ' + turbo); });
+lightsBtn.addEventListener('click', ()=> { lights = !lights; lightsBtn.classList.toggle('active', lights); logDbg('Lights ' + lights); });
+
+/* --- Cleanup on page unload --- */
+window.addEventListener('unload', () => { if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) bleDevice.gatt.disconnect(); });
+
+/* --- initial debug lines --- */
+logDbg('Client ready — press Connect to pair with QCAR device.');
+</script>
+</body>
+</html>
