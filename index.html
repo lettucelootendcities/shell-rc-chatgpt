@@ -1,133 +1,339 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Shell RC — fixed control</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ShellRC — Shell / Bburago (iOS dark blue)</title>
+
+<!--
+  Complete single-file app:
+  - Dark iOS-style UI with blue glow
+  - Mode switch: Shell (AES 16-byte) / Bburago (8-byte plaintext)
+  - AES-128-ECB battery decrypt for Shell mode (key included as requested)
+  - Continuous streaming, joystick + controller sync, debug panel
+  - Annotated in plain English
+-->
+
 <style>
-  /* compact styles (dark + blue glow) */
-  :root { --bg:#05060a; --accent:#0a84ff; --muted:#9aa3b2; }
-  html,body{height:100%;margin:0;background:linear-gradient(180deg,#03040a,#071022);font-family:-apple-system,Segoe UI,Roboto,Helvetica;color:#e6eef8}
-  .app{padding:22px;display:flex;gap:18px;max-width:980px;margin:20px auto}
-  .panel{background:rgba(255,255,255,0.02);padding:18px;border-radius:14px;border:1px solid rgba(255,255,255,0.03)}
-  .left{width:320px}
-  h1{color:var(--accent);margin:0 0 8px 0}
-  .connectBtn{background:linear-gradient(180deg,var(--accent),#2b9bff);color:#fff;padding:10px 14px;border-radius:12px;border:none;cursor:pointer;font-weight:700}
-  .statusBadge{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,0.02);display:inline-block;font-weight:700}
-  .batteryBar{height:14px;background:rgba(255,255,255,0.04);border-radius:10px;overflow:hidden}
-  .batteryFill{height:100%;width:0%;background:linear-gradient(90deg,#34c759,#0ad0ff);transition:width .25s}
-  .right{flex:1;display:flex;flex-direction:column;gap:12px}
-  .sticks{display:flex;gap:12px;justify-content:space-between}
-  canvas{background:transparent;border-radius:999px;touch-action:none}
-  .ctrlRow{display:flex;gap:8px;justify-content:flex-end}
-  .ctrlBtn{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:rgba(255,255,255,0.02);color:var(--accent);font-weight:700;cursor:pointer}
-  .ctrlBtn.active{background:linear-gradient(180deg,#0df,#08a);color:white;box-shadow:0 6px 18px rgba(10,132,255,0.09)}
-  .debug{position:fixed;right:12px;bottom:12px;width:340px;background:rgba(0,0,0,0.6);padding:8px;border-radius:8px;border:1px solid rgba(10,132,255,0.06);font-family:monospace;font-size:12px;color:#bfefff}
-  .dbgHeader{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-  .dbgLog{max-height:160px;overflow:auto;margin:0;padding:6px;background:transparent;color:#bfefff}
+  :root{
+    --bg1:#02040a; --bg2:#071228; --accent:#0a84ff; --muted:#9aa3b2;
+    --glass: rgba(255,255,255,0.03);
+    --glass-border: rgba(255,255,255,0.04);
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg1),var(--bg2));font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Roboto,Segoe UI;color:#e6f5ff}
+  .wrap{display:flex;align-items:center;justify-content:center;height:100%;padding:28px;box-sizing:border-box}
+  .card{
+    width:980px; max-width:980px; border-radius:20px; padding:20px; display:grid;
+    grid-template-columns:360px 1fr; gap:18px; background:linear-gradient(180deg, rgba(12,18,30,0.7), rgba(4,6,12,0.6));
+    border:1px solid var(--glass-border); box-shadow: 0 18px 40px rgba(2,6,23,0.6);
+    backdrop-filter: blur(6px);
+  }
+  h1{color:var(--accent); margin:0; font-size:22px; font-weight:800}
+  .sub { color:var(--muted); font-size:13px; margin-top:6px; }
+  .left { display:flex; flex-direction:column; gap:12px; padding:14px; border-radius:12px; background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent); border:1px solid rgba(255,255,255,0.02)}
+  .right { padding:14px; border-radius:12px; background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent); border:1px solid rgba(255,255,255,0.02); display:flex; flex-direction:column; gap:12px}
+  .connect { background:linear-gradient(180deg,var(--accent),#2fa3ff); color:white; border:none; padding:12px 16px; border-radius:14px; font-weight:800; box-shadow: 0 8px 22px rgba(10,132,255,0.14); cursor:pointer }
+  .statusRow{display:flex; gap:10px; align-items:center}
+  .badge { padding:8px 10px; border-radius:12px; background:var(--glass); color:var(--muted); font-weight:700; font-size:13px; border:1px solid rgba(255,255,255,0.02) }
+  .batterySection{display:flex; flex-direction:column; gap:8px}
+  .batteryBar { height:14px; background:rgba(255,255,255,0.03); border-radius:10px; overflow:hidden; border:1px solid rgba(255,255,255,0.02) }
+  .batteryFill { height:100%; width:0%; background:linear-gradient(90deg,#34c759,#0ad0ff); transition: width 300ms ease, background 200ms ease }
+  .muted { color:var(--muted); font-size:13px }
+
+  /* joysticks */
+  .joysticks { display:flex; gap:18px; justify-content:center; align-items:center; }
+  .stickWrap { flex:1; background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02)); border-radius:14px; padding:12px; border:1px solid rgba(255,255,255,0.02); display:flex; flex-direction:column; align-items:center; }
+  .stickTitle { color:var(--muted); font-size:13px; margin-bottom:10px }
+  canvas { width:200px; height:200px; border-radius:999px; touch-action:none; display:block; }
+
+  /* controls row */
+  .controls { display:flex; gap:12px; justify-content:flex-end }
+  .ctrlBtn { padding:10px 14px; border-radius:12px; border:1px solid rgba(255,255,255,0.03); background:rgba(255,255,255,0.02); color:var(--accent); font-weight:800; cursor:pointer }
+  .ctrlBtn.active { background:linear-gradient(180deg,#0df,#08a); color:white; box-shadow:0 8px 20px rgba(10,132,255,0.12) }
+
+  /* protocol switch */
+  .proto { display:flex; gap:8px; align-items:center; font-weight:700; color:var(--muted) }
+
+  /* debug panel */
+  .debug { position:fixed; right:18px; bottom:18px; width:360px; background:rgba(2,6,20,0.75); border-radius:12px; padding:10px; border:1px solid rgba(10,132,255,0.06); font-family:monospace; font-size:12px; color:#bfefff; box-shadow: 0 10px 28px rgba(2,6,23,0.6) }
+  .dbgHeader { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
+  .dbgLog { max-height:200px; overflow:auto; margin:0; padding:6px; background:transparent; color:#bfefff }
+
+  @keyframes pulseGlow {
+    0% { box-shadow: 0 6px 18px rgba(10,132,255,0.12); transform: translateY(0); }
+    50% { box-shadow: 0 18px 34px rgba(10,132,255,0.18); transform: translateY(-1px); }
+    100% { box-shadow: 0 6px 18px rgba(10,132,255,0.12); transform: translateY(0); }
+  }
+  .glow { animation: pulseGlow 2s infinite; border:1px solid rgba(10,132,255,0.06) }
 </style>
 </head>
 <body>
+<div class="wrap">
+  <div class="card" role="application" aria-label="Shell RC Controller">
 
-<div class="app">
-  <div class="panel left">
-    <h1>vechicular device controlller app</h1>
-    <div style="margin-bottom:10px;color:#9fbff0">  </div>
+    <!-- LEFT: Connect / Battery / Vehicle info -->
+    <div class="left">
+      <div>
+        <h1>ShellRC</h1>
+        <div class="sub">Switch protocol, connect, and drive — AES & plain modes supported</div>
+      </div>
 
-    <button id="connectBtn" class="connectBtn">Connect</button>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-      <div class="statusBadge" id="connBadge">Disconnected</div>
-      <div class="statusBadge" id="vehBadge">Vehicle: connect to continue</div>
+      <!-- Protocol switch -->
+      <div style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;">
+        <div class="proto">
+          <label for="protocol">Protocol</label>
+          <select id="protocol" style="padding:8px;border-radius:8px;background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.03)">
+            <option value="shell">Shell (encrypted)</option>
+            <option value="bburago">Bburago (simple)</option>
+          </select>
+        </div>
+        <button id="connectBtn" class="connect glow">Connect</button>
+      </div>
+
+      <div class="statusRow" style="margin-top:8px">
+        <div id="connBadge" class="badge">Disconnected</div>
+        <div id="vehicleBadge" class="badge">Vehicle: Unknown</div>
+      </div>
+
+      <!-- Battery -->
+      <div class="batterySection">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="muted">Battery</div>
+          <div id="batteryPct" style="font-weight:800">--%</div>
+        </div>
+        <div class="batteryBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="batteryFill" class="batteryFill"></div>
+        </div>
+        <div class="muted">Battery decoding depends on protocol: Shell (AES) or Bburago (raw % byte).</div>
+      </div>
+
+      <div>
+        <div class="muted">State</div>
+        <div id="stateLabel" style="font-weight:900;font-size:16px;margin-top:6px">Idle</div>
+      </div>
+
+      <div style="margin-top:auto" class="muted">Notes: Use Chrome/Brave on desktop, Safari on iOS. Web Bluetooth requires HTTPS or localhost.</div>
     </div>
 
-    <div style="margin-top:14px">
+    <!-- RIGHT: Joysticks + Controls -->
+    <div class="right">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:13px;color:#9aa3b2">Battery</div>
-        <div id="batteryText" style="font-weight:800">--%</div>
+        <div class="muted">Dual joysticks • controller supported • deadzone 0.2</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div id="modeBadge" class="badge">Mode: Shell</div>
+        </div>
       </div>
-      <div class="batteryBar" style="margin-top:8px">
-        <div id="batteryFill" class="batteryFill" style="width:0%"></div>
+
+      <div class="joysticks">
+        <div class="stickWrap">
+          <div class="stickTitle">Throttle (Left)</div>
+          <canvas id="leftJoystick" width="220" height="220"></canvas>
+        </div>
+
+        <div class="stickWrap">
+          <div class="stickTitle">Steering (Right)</div>
+          <canvas id="rightJoystick" width="220" height="220"></canvas>
+        </div>
       </div>
-    </div>
 
-    <div style="margin-top:14px">
-      <div style="font-size:13px;color:#9aa3b2">State</div>
-      <div id="stateLabel" style="font-weight:800;margin-top:6px">Idle</div>
-    </div>
-
-    <div style="margin-top:18px;color:#9aa3b2;font-size:13px">    </div>
-  </div>
-
-  <div class="panel right">
-    <div class="sticks">
-      <div style="flex:1;text-align:center">
-        <div style="font-size:13px;color:#9aa3b2;margin-bottom:6px">Throttle</div>
-        <canvas id="leftCanvas" width="200" height="200"></canvas>
-      </div>
-      <div style="flex:1;text-align:center">
-        <div style="font-size:13px;color:#9aa3b2;margin-bottom:6px">Steering</div>
-        <canvas id="rightCanvas" width="200" height="200"></canvas>
+      <div class="controls">
+        <button id="turboBtn" class="ctrlBtn">Turbo</button>
+        <button id="lightsBtn" class="ctrlBtn">Lights</button>
       </div>
     </div>
 
-    <div class="ctrlRow">
-      <button id="turboBtn" class="ctrlBtn">Turbo</button>
-      <button id="lightsBtn" class="ctrlBtn">Lights</button>
-    </div>
   </div>
 </div>
 
-<div class="debug" id="debug">
-  <div class="dbgHeader"><div style="color:var(--accent);font-weight:800">Debug</div><button id="dbgClear" style="background:transparent;border:none;color:#9aa3b2;cursor:pointer">Clear</button></div>
-  <div style="display:flex;gap:8px;margin-bottom:8px">
-    <div style="flex:1">Conn: <span id="dbgConn">no</span></div>
-    <div style="flex:1">Veh: <span id="dbgVeh">--</span></div>
+<!-- debug panel (collapsible) -->
+<div class="debug" id="debugPanel" aria-live="polite">
+  <div class="dbgHeader">
+    <div style="font-weight:900;color:var(--accent)">Debug</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="dbgToggle" style="background:transparent;border:none;color:var(--muted);cursor:pointer">Collapse</button>
+    </div>
   </div>
-  <pre id="dbgLog" class="dbgLog">log init.</pre>
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div>Conn: <span id="dbgConn">no</span></div>
+    <div>Veh: <span id="dbgVeh">--</span></div>
+  </div>
+  <pre id="dbgLog" class="dbgLog">Initialized log.</pre>
 </div>
 
 <script>
-/* ===========================
-   FIXED Shell RC client
-   - Ensures actual Uint8Array writes
-   - Immediate send + streaming for hold
-   - Correct joystick -> left steering fix
-   - Logging and fallback writeValue
-   =========================== */
+/* =================================================================================
+   Complete app script — annotated
 
-/* --- Config --- */
+   Behavior summary:
+   - Mode select: "shell" (encrypted, 16-byte commands + AES battery) or "bburago" (simple)
+   - Connect uses same root service uuid; control & battery characteristic UUIDs change per mode
+   - Streaming loop sends full command every STREAM_INTERVAL ms
+   - Joysticks update move flags and send immediate command for responsiveness
+   - Gamepad polling updates move flags and visually syncs virtual joysticks
+   - Battery handling: AES decrypt for shell (byte index 4), direct 1-byte percent for bburago
+   ================================================================================= */
+
+/* --------------------------
+   Config & globals
+   -------------------------- */
 const SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
-const CONTROL_UUID = 'd44bc439-abfd-45a2-b575-925416129600';
-const BATTERY_UUID = 'd44bc439-abfd-45a2-b575-925416129601';
-const AES_KEY = new Uint8Array([0x34,0x52,0x2a,0x5b,0x7a,0x6e,0x49,0x2c,0x08,0x09,0x0a,0x9d,0x8d,0x2a,0x23,0xf8]);
-const DEADZONE = 0.2;
-const STREAM_INTERVAL = 100; // ms
 
-/* --- UI refs --- */
+// Profiles per protocol
+const PROFILE = {
+  shell: {
+    controlUUID: 'd44bc439-abfd-45a2-b575-925416129600',
+    batteryUUID: 'd44bc439-abfd-45a2-b575-925416129601',
+    encrypted: true,
+    controlLen: 16
+  },
+  bburago: {
+    controlUUID: '0000fff1-0000-1000-8000-00805f9b34fb',
+    batteryUUID: '00002a19-0000-1000-8000-00805f9b34fb',
+    encrypted: false,
+    controlLen: 8
+  }
+};
+
+// AES key for shell mode (you confirmed earlier)
+const AES_KEY_BYTES = new Uint8Array([0x34,0x52,0x2a,0x5b,0x7a,0x6e,0x49,0x2c,0x08,0x09,0x0a,0x9d,0x8d,0x2a,0x23,0xf8]);
+
+const DEADZONE = 0.2;
+const STREAM_INTERVAL = 100; // ms continuous stream to avoid stop/timeouts
+
+// UI refs
 const connectBtn = document.getElementById('connectBtn');
+const protocolSelect = document.getElementById('protocol');
 const connBadge = document.getElementById('connBadge');
-const vehBadge = document.getElementById('vehBadge');
-const batteryText = document.getElementById('batteryText');
-const batteryFill = document.getElementById('batteryFill');
+const vehicleBadge = document.getElementById('vehicleBadge');
+const modeBadge = document.getElementById('modeBadge');
+const batteryPctEl = document.getElementById('batteryPct');
+const batteryFillEl = document.getElementById('batteryFill');
 const stateLabel = document.getElementById('stateLabel');
 const dbgLog = document.getElementById('dbgLog');
 const dbgConn = document.getElementById('dbgConn');
 const dbgVeh = document.getElementById('dbgVeh');
-const dbgClear = document.getElementById('dbgClear');
+const dbgToggle = document.getElementById('dbgToggle');
 const turboBtn = document.getElementById('turboBtn');
 const lightsBtn = document.getElementById('lightsBtn');
+const protocolMode = () => protocolSelect.value; // 'shell' or 'bburago'
 
-/* --- Debug helpers --- */
-function logDbg(s) {
+// Debug helper
+function dbg(msg) {
   const t = new Date().toLocaleTimeString();
-  dbgLog.textContent = `${t} — ${s}\n` + dbgLog.textContent;
-  console.log(s);
+  dbgLog.textContent = `${t} — ${msg}\n` + dbgLog.textContent;
+  console.log(msg);
 }
-dbgClear.addEventListener('click', ()=> dbgLog.textContent = '');
 
-/* --- Command hex table (full 16-byte hex strings) ---
-   These are exact 16-byte arrays taken from the Brandbase listing earlier.
-*/
+/* --------------------------
+   AES-128-ECB single-block decrypt implementation
+   (same compact implementation as earlier)
+   NOTE: browsers don't expose ECB via WebCrypto, so we implement block decrypt inline.
+   This implementation is intentionally single-block only and is OK for decrypting 16-byte battery payloads.
+   -------------------------- */
+let _aes_tables = null;
+function aes_init_tables() {
+  if (_aes_tables) return _aes_tables;
+  const pow = new Uint8Array(256), log = new Uint8Array(256);
+  let x = 1;
+  for (let i=0;i<256;i++){ pow[i]=x; log[x]=i; x = (x<<1) ^ (x & 0x80 ? 0x11b : 0); }
+  const sbox = new Uint8Array(256), invsbox = new Uint8Array(256);
+  sbox[0]=0x63; invsbox[0x63]=0;
+  for (let i=1;i<256;i++){
+    let inv = pow[255 - log[i]];
+    let y = inv, t = inv;
+    y = (t<<1) ^ (t & 0x80 ? 0x11b : 0);
+    t = (y ^ (y<<1) ^ (y<<2) ^ (y<<3) ^ (y<<4)) & 0xFF;
+    sbox[i] = (t ^ 0x63) & 0xFF;
+    invsbox[sbox[i]] = i;
+  }
+  const Rcon = new Uint8Array(11);
+  Rcon[0] = 0;
+  let r = 1;
+  for (let i=1;i<11;i++){ Rcon[i] = r; r = (r<<1) ^ (r & 0x80 ? 0x11b : 0); }
+  _aes_tables = { sbox, invsbox, Rcon };
+  return _aes_tables;
+}
+
+function keyExpansion(keyBytes) {
+  const tk = new Uint8Array(176);
+  tk.set(keyBytes);
+  const { sbox, Rcon } = aes_init_tables();
+  let bytesGenerated = 16;
+  let rconIter = 1;
+  const temp = new Uint8Array(4);
+  while (bytesGenerated < 176) {
+    for (let i=0;i<4;i++) temp[i] = tk[bytesGenerated - 4 + i];
+    if (bytesGenerated % 16 === 0) {
+      const t = temp[0];
+      temp[0] = sbox[temp[1]] ^ Rcon[rconIter];
+      temp[1] = sbox[temp[2]];
+      temp[2] = sbox[temp[3]];
+      temp[3] = sbox[t];
+      rconIter++;
+    } else {
+      for (let i=0;i<4;i++) temp[i] = sbox[temp[i]];
+    }
+    for (let i=0;i<4;i++) {
+      tk[bytesGenerated] = tk[bytesGenerated - 16] ^ temp[i];
+      bytesGenerated++;
+    }
+  }
+  return tk;
+}
+
+function gfMul(a,b) {
+  let p = 0;
+  for (let i=0;i<8;i++){
+    if (b & 1) p ^= a;
+    const hi = a & 0x80;
+    a = (a << 1) & 0xFF;
+    if (hi) a ^= 0x1b;
+    b >>= 1;
+  }
+  return p;
+}
+
+function aesDecryptBlock(block16, roundKeys) {
+  const { invsbox } = aes_init_tables();
+  const state = new Uint8Array(block16);
+  const addRoundKey = r => {
+    const off = r * 16;
+    for (let i=0;i<16;i++) state[i] ^= roundKeys[off + i];
+  };
+  const invShiftRows = () => {
+    let t = state[1]; state[1]=state[13]; state[13]=state[9]; state[9]=state[5]; state[5]=t;
+    t = state[2]; let t2 = state[10]; state[2]=t2; state[10]=t;
+    t = state[6]; t2 = state[14]; state[6]=t2; state[14]=t;
+    t = state[3]; state[3]=state[7]; state[7]=state[11]; state[11]=state[15]; state[15]=t;
+  };
+  const invSubBytes = () => { for (let i=0;i<16;i++) state[i] = invsbox[state[i]]; };
+  const invMixColumns = () => {
+    for (let c=0;c<4;c++){
+      const i = c*4;
+      const a0 = state[i], a1 = state[i+1], a2 = state[i+2], a3 = state[i+3];
+      state[i]   = gfMul(0x0e,a0) ^ gfMul(0x0b,a1) ^ gfMul(0x0d,a2) ^ gfMul(0x09,a3);
+      state[i+1] = gfMul(0x09,a0) ^ gfMul(0x0e,a1) ^ gfMul(0x0b,a2) ^ gfMul(0x0d,a3);
+      state[i+2] = gfMul(0x0d,a0) ^ gfMul(0x09,a1) ^ gfMul(0x0e,a2) ^ gfMul(0x0b,a3);
+      state[i+3] = gfMul(0x0b,a0) ^ gfMul(0x0d,a1) ^ gfMul(0x09,a2) ^ gfMul(0x0e,a3);
+    }
+  };
+  const Nr = 10;
+  addRoundKey(Nr);
+  for (let round = Nr - 1; round >= 1; round--) {
+    invShiftRows(); invSubBytes(); addRoundKey(round); invMixColumns();
+  }
+  invShiftRows(); invSubBytes(); addRoundKey(0);
+  return state;
+}
+
+function aes128_ecb_decrypt_block(block16, keyBytes) {
+  const roundKeys = keyExpansion(keyBytes);
+  return aesDecryptBlock(block16, roundKeys);
+}
+
+/* --------------------------
+   Command tables
+   -------------------------- */
 const COMMAND_HEX = {
   idle:            "025e695a48ff2a438ca680f83e04e45d",
   forward:         "29609c664852cff1b0f0cbb98014bd2c",
@@ -140,256 +346,244 @@ const COMMAND_HEX = {
   forwardRight:    "0f2ce56662d4fd9d32a44f102bf20aa7",
   backwardLeft:    "98ce981d58d115afe11960bf4613925c",
   backwardRight:   "f2520fba3144fb11468fe080c6c2c23c",
-  forwardTurboLeft:  "592381c943a417ca1bc3b59400e0fc12",
-  forwardTurboRight: "fb976fba04af87022226ec50ae82f8c4",
-  backwardTurboLeft: "d54ad55857d327745f141dd00d671595",
+  forwardTurboLeft:"592381c943a417ca1bc3b59400e0fc12",
+  forwardTurboRight:"fb976fba04af87022226ec50ae82f8c4",
+  backwardTurboLeft:"d54ad55857d327745f141dd00d671595",
   backwardTurboRight:"80dfb2165f3260f1d9837750f43a43da"
 };
 
-/* convert hex -> Uint8Array */
-function hexToBytes(hex) {
-  const out = new Uint8Array(16);
-  for (let i=0;i<16;i++) out[i]=parseInt(hex.substr(i*2,2),16);
-  return out;
+function hexToBytes16(hex) {
+  const arr = new Uint8Array(16);
+  for (let i=0;i<16;i++) arr[i] = parseInt(hex.substr(i*2,2),16);
+  return arr;
 }
 
-/* short key map used in decideCommandKey */
+/* short key to command name map */
 const CMD_MAP = {
-  idle: 'idle', f:'forward', f_t:'forwardTurbo', b:'backward', b_t:'backwardTurbo',
-  l:'left', r:'right', f_l:'forwardLeft', f_r:'forwardRight',
-  b_l:'backwardLeft', b_r:'backwardRight', f_tl:'forwardTurboLeft', f_tr:'forwardTurboRight',
-  b_tl:'backwardTurboLeft', b_tr:'backwardTurboRight'
+  idle: "idle",
+  f: "forward",
+  f_t: "forwardTurbo",
+  b: "backward",
+  b_t: "backwardTurbo",
+  l: "left",
+  r: "right",
+  f_l: "forwardLeft",
+  f_r: "forwardRight",
+  b_l: "backwardLeft",
+  b_r: "backwardRight",
+  f_tl: "forwardTurboLeft",
+  f_tr: "forwardTurboRight",
+  b_tl: "backwardTurboLeft",
+  b_tr: "backwardTurboRight"
 };
 
-/* --- AES decrypt functions for battery (AES-128-ECB) ---
-   (small single-block decrypt implementation similar to earlier)
-   We only call aes128_ecb_decrypt once per battery notification.
-   If battery decryption fails, we show raw bytes in debug.
-*/
-let _aes_tables = null;
-function aes_init() {
-  if (_aes_tables) return _aes_tables;
-  const pow = new Uint8Array(256), log = new Uint8Array(256);
-  let x = 1;
-  for (let i=0;i<256;i++){ pow[i]=x; log[x]=i; x = (x<<1) ^ (x & 0x80 ? 0x11b : 0); }
-  const sbox = new Uint8Array(256), invsbox = new Uint8Array(256);
-  sbox[0]=0x63; invsbox[0x63]=0;
-  for (let i=1;i<256;i++){
-    let inv = pow[255-log[i]];
-    let y = inv, t=inv;
-    y = (t<<1) ^ (t & 0x80 ? 0x11b : 0);
-    t = (y ^ (y<<1) ^ (y<<2) ^ (y<<3) ^ (y<<4)) & 0xFF;
-    sbox[i] = (t ^ 0x63) & 0xFF;
-    invsbox[sbox[i]] = i;
-  }
-  const Rcon = new Uint8Array(11); Rcon[0]=0; let r=1; for (let i=1;i<11;i++){ Rcon[i]=r; r=(r<<1) ^ (r & 0x80 ? 0x11b : 0); }
-  _aes_tables = { sbox, invsbox, Rcon }; return _aes_tables;
-}
-function keyExpansion(keyBytes) {
-  const tk = new Uint8Array(176); tk.set(keyBytes,0);
-  const { sbox, Rcon } = aes_init();
-  let generated = 16, rconIter = 1; const temp = new Uint8Array(4);
-  while (generated < 176) {
-    for (let i=0;i<4;i++) temp[i]=tk[generated-4+i];
-    if (generated % 16 === 0) {
-      const t = temp[0];
-      temp[0] = sbox[temp[1]] ^ Rcon[rconIter];
-      temp[1] = sbox[temp[2]];
-      temp[2] = sbox[temp[3]];
-      temp[3] = sbox[t];
-      rconIter++;
-    } else {
-      for (let i=0;i<4;i++) temp[i] = sbox[temp[i]];
-    }
-    for (let i=0;i<4;i++){ tk[generated] = tk[generated-16] ^ temp[i]; generated++; }
-  }
-  return tk;
-}
-function gfMul(a,b) {
-  let p=0;
-  for (let i=0;i<8;i++){
-    if (b & 1) p ^= a;
-    const hi = a & 0x80;
-    a = (a << 1) & 0xFF;
-    if (hi) a ^= 0x1b;
-    b >>= 1;
-  }
-  return p;
-}
-function aesDecryptBlock(block, roundKeys) {
-  const { invsbox } = aes_init();
-  const state = new Uint8Array(block);
-  const addRoundKey = (r) => { const off = r*16; for (let i=0;i<16;i++) state[i] ^= roundKeys[off+i]; };
-  const invShiftRows = () => {
-    let t = state[1]; state[1]=state[13]; state[13]=state[9]; state[9]=state[5]; state[5]=t;
-    t=state[2]; let t2=state[10]; state[2]=t2; state[10]=t;
-    t=state[6]; t2=state[14]; state[6]=t2; state[14]=t;
-    t=state[3]; state[3]=state[7]; state[7]=state[11]; state[11]=state[15]; state[15]=t;
-  };
-  const invSubBytes = () => { for (let i=0;i<16;i++) state[i]=invsbox[state[i]]; };
-  const invMixCols = () => {
-    for (let c=0;c<4;c++){
-      const i=c*4; const a0=state[i],a1=state[i+1],a2=state[i+2],a3=state[i+3];
-      state[i]   = gfMul(0x0e,a0) ^ gfMul(0x0b,a1) ^ gfMul(0x0d,a2) ^ gfMul(0x09,a3);
-      state[i+1] = gfMul(0x09,a0) ^ gfMul(0x0e,a1) ^ gfMul(0x0b,a2) ^ gfMul(0x0d,a3);
-      state[i+2] = gfMul(0x0d,a0) ^ gfMul(0x09,a1) ^ gfMul(0x0e,a2) ^ gfMul(0x0b,a3);
-      state[i+3] = gfMul(0x0b,a0) ^ gfMul(0x0d,a1) ^ gfMul(0x09,a2) ^ gfMul(0x0e,a3);
-    }
-  };
-  const Nr = 10;
-  addRoundKey(Nr);
-  for (let round=Nr-1; round>=1; round--) {
-    invShiftRows(); invSubBytes(); addRoundKey(round); invMixCols();
-  }
-  invShiftRows(); invSubBytes(); addRoundKey(0);
-  return state;
-}
-function aes128_ecb_decrypt(block16, keyBytes) {
-  const rk = keyExpansion(keyBytes);
-  return aesDecryptBlock(block16, rk);
-}
-
-/* --- BLE state --- */
+/* --------------------------
+   BLE runtime state
+   -------------------------- */
 let bleDevice = null;
 let bleControlChar = null;
 let bleBatteryChar = null;
-let streamingTimer = null;
+let streamingHandle = null;
 
-/* --- Move flags and turbo/lights --- */
 let move = { f:false, b:false, l:false, r:false };
 let turbo = false, lights = false;
 
-/* --- Device recognition helper --- */
-function recognizeDeviceName(name) {
+/* --------------------------
+   Utility / device recognition
+   -------------------------- */
+function recognizeVehicleName(name) {
   if (!name) return "Unknown Vehicle";
-  const u = name.toUpperCase();
-  if (u.startsWith("QCAR-043666")) return "Nissan Formula E";
-  if (u.startsWith("QCAR-196B53")) return "BMW M1";
-  const m = u.match(/^QCAR-([0-9A-F]{4,8})/);
-  return m ? ("QCAR " + m[1]) : name;
+  const n = name.toUpperCase();
+  if (n.startsWith("QCAR-043666")) return "Nissan Formula E";
+  if (n.startsWith("QCAR-196B53")) return "BMW M1";
+  // Bburago names from snippet:
+  if (n.startsWith("SL-FXX-K EVO") || n.startsWith("SL-FXX-K")) return name;
+  if (n.startsWith("SL-SF1000")) return name;
+  if (n.startsWith("SL-488 CHALLENGE EVO")) return name;
+  return name;
 }
 
-/* --- Connect handler --- */
-connectBtn.addEventListener('click', async () => {
+/* --------------------------
+   BLE connect logic (handles both modes)
+   -------------------------- */
+async function connectToCar() {
+  const mode = protocolMode();
+  const profile = PROFILE[mode];
+  dbg(`Connecting in ${mode.toUpperCase()} mode...`);
   try {
-    connectBtn.disabled = true;
-    connectBtn.textContent = 'Pairing…';
-    logDbg('Requesting BLE device (QCAR filter)');
+    // Ask for either QCAR or SL-* depending on mode to simplify selection
+    const nameFilter = mode === 'shell' ? { namePrefix: 'QCAR' } : { namePrefix: 'SL-' };
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'QCAR' }],
-      optionalServices: [SERVICE_UUID]
+      filters: [ nameFilter ],
+      optionalServices: [ SERVICE_UUID, '0000180f-0000-1000-8000-00805f9b34fb' ]
     });
     bleDevice = device;
-    const vname = device.name || 'Unknown';
-    vehBadge.textContent = 'Vehicle: ' + recognizeDeviceName(vname);
-    dbgVeh.textContent = recognizeDeviceName(vname);
-    logDbg('Selected: ' + vname);
+    const vehicleName = device.name || 'Unknown';
+    vehicleBadge.textContent = `Vehicle: ${recognizeVehicleName(vehicleName)}`;
+    dbg(`Selected device: ${vehicleName}`);
+    modeBadge.textContent = `Mode: ${mode === 'shell' ? 'Shell' : 'Bburago'}`;
+    dbgConn.textContent = 'pending';
 
     const server = await device.gatt.connect();
-    logDbg('Connected GATT');
+    dbg('Connected GATT');
     const service = await server.getPrimaryService(SERVICE_UUID);
-    logDbg('Got service; getting characteristics');
-    bleControlChar = await service.getCharacteristic(CONTROL_UUID);
+    // control characteristic (profile-specific)
+    bleControlChar = await service.getCharacteristic(profile.controlUUID);
+    dbg(`Control characteristic found: ${profile.controlUUID}`);
+
+    // battery characteristic may be in different service for bburago
     try {
-      bleBatteryChar = await service.getCharacteristic(BATTERY_UUID);
+      if (mode === 'shell') {
+        bleBatteryChar = await service.getCharacteristic(profile.batteryUUID);
+      } else {
+        // bburago uses battery service 0x180f with characteristic 0x2A19
+        const battService = await server.getPrimaryService('0000180f-0000-1000-8000-00805f9b34fb');
+        bleBatteryChar = await battService.getCharacteristic(profile.batteryUUID);
+      }
       await bleBatteryChar.startNotifications();
-      bleBatteryChar.addEventListener('characteristicvaluechanged', onBatteryNotif);
-      logDbg('Battery notifications enabled');
-    } catch (e) {
-      logDbg('Battery char not found or notifications failed: ' + e);
+      bleBatteryChar.addEventListener('characteristicvaluechanged', handleBatteryNotification);
+      dbg('Battery notifications enabled');
+    } catch (err) {
+      dbg('Battery characteristic not available: ' + (err.message || err));
     }
 
+    // update UI
     connBadge.textContent = 'Connected';
+    connBadge.style.background = 'linear-gradient(90deg,#002a6d,#0047b3)';
+    connBadge.style.color = 'white';
     dbgConn.textContent = 'yes';
-    connectBtn.textContent = 'Connected';
-    connectBtn.style.background = '#34c759';
-    startStreaming();
-    // reconnect auto
+    dbgVeh.textContent = recognizeVehicleName(vehicleName);
+
+    // handle disconnect -> auto reconnect attempt
     device.addEventListener('gattserverdisconnected', async () => {
-      logDbg('Device disconnected; attempting reconnect...');
+      dbg('Device disconnected; attempting reconnect...');
       connBadge.textContent = 'Disconnected';
       dbgConn.textContent = 'no';
       try {
-        await reconnectDevice();
-      } catch (err) {
-        logDbg('Reconnect failed: ' + err);
-        connectBtn.disabled = false;
-        connectBtn.textContent = 'Connect to Car';
+        await reconnect();
+      } catch (e) {
+        dbg('Auto-reconnect failed: ' + e);
       }
     });
-  } catch (err) {
-    logDbg('Connect failed: ' + (err && err.message ? err.message : err));
-    connectBtn.disabled = false;
-    connectBtn.textContent = 'Connect to Car';
-  }
-});
 
-/* --- Reconnect helper --- */
-async function reconnectDevice() {
-  if (!bleDevice) throw new Error('no device');
+    // start streaming loop
+    startStreaming();
+
+  } catch (e) {
+    dbg('Connection error: ' + (e.message || e));
+    connectBtn.disabled = false;
+  }
+}
+
+async function reconnect() {
+  if (!bleDevice) throw new Error('No previous device');
   const server = await bleDevice.gatt.connect();
   const service = await server.getPrimaryService(SERVICE_UUID);
-  bleControlChar = await service.getCharacteristic(CONTROL_UUID);
+  const mode = protocolMode();
+  const profile = PROFILE[mode];
+  bleControlChar = await service.getCharacteristic(profile.controlUUID);
   try {
-    bleBatteryChar = await service.getCharacteristic(BATTERY_UUID);
+    if (mode === 'shell') {
+      bleBatteryChar = await service.getCharacteristic(profile.batteryUUID);
+    } else {
+      const battService = await server.getPrimaryService('0000180f-0000-1000-8000-00805f9b34fb');
+      bleBatteryChar = await battService.getCharacteristic(profile.batteryUUID);
+    }
     await bleBatteryChar.startNotifications();
-    bleBatteryChar.addEventListener('characteristicvaluechanged', onBatteryNotif);
-  } catch (e) { logDbg('Battery re-enable failed: ' + e); }
+    bleBatteryChar.addEventListener('characteristicvaluechanged', handleBatteryNotification);
+  } catch (e) {
+    dbg('Battery re-enable failed: ' + e);
+  }
   connBadge.textContent = 'Connected';
   dbgConn.textContent = 'yes';
+  dbg('Reconnected');
   startStreaming();
-  logDbg('Reconnected');
 }
 
-/* --- Battery notification handler --- */
-function onBatteryNotif(e) {
+/* --------------------------
+   Battery handler (mode-specific)
+   -------------------------- */
+function handleBatteryNotification(event) {
+  const mode = protocolMode();
   try {
-    const dv = e.target.value;
-    const block = new Uint8Array(16);
-    for (let i=0;i<16;i++) block[i]=dv.getUint8(i);
-    // decrypt
-    const dec = aes128_ecb_decrypt(block, AES_KEY);
-    const raw = dec[4]; // byte index 4
-    const pct = Math.max(0, Math.min(100, Math.round((raw/255)*100)));
-    batteryText.textContent = pct + '%';
-    batteryFill.style.width = pct + '%';
-    logDbg(`Battery raw:${raw} -> ${pct}%`);
-  } catch (err) {
-    logDbg('Battery decrypt error: ' + err);
+    if (mode === 'bburago') {
+      // raw one-byte percent (0-100)
+      const v = event.target.value.getUint8(0);
+      const pct = Math.max(0, Math.min(100, v));
+      batteryPctEl.textContent = pct + '%';
+      batteryFillEl.style.width = pct + '%';
+      batteryFillEl.style.background = pct < 20 ? 'linear-gradient(90deg,#ff3b30,#ff7b6a)' : (pct < 50 ? 'linear-gradient(90deg,#ffd60a,#ffd88a)' : 'linear-gradient(90deg,#34c759,#0ad0ff)');
+      dbg(`Battery (bburago) raw=${v} -> ${pct}%`);
+    } else {
+      // Shell mode — decrypt AES-128-ECB block, read byte index 4
+      const dv = event.target.value;
+      const block = new Uint8Array(16);
+      for (let i=0;i<16;i++) block[i] = dv.getUint8(i);
+      const dec = aes128_ecb_decrypt_block(block, AES_KEY_BYTES);
+      const rawVal = dec[4];
+      const pct = Math.max(0, Math.min(100, Math.round((rawVal/255)*100)));
+      batteryPctEl.textContent = pct + '%';
+      batteryFillEl.style.width = pct + '%';
+      batteryFillEl.style.background = pct < 20 ? 'linear-gradient(90deg,#ff3b30,#ff7b6a)' : (pct < 50 ? 'linear-gradient(90deg,#ffd60a,#ffd88a)' : 'linear-gradient(90deg,#34c759,#0ad0ff)');
+      dbg(`Battery (shell) decrypted raw=${rawVal} -> ${pct}%`);
+    }
+  } catch (e) {
+    dbg('Battery parse error: ' + e);
   }
 }
 
-/* --- Send command (immediate send + streaming) --- */
-async function sendCommandNow(shortKey) {
-  // shortKey is like 'f','b','l','r','f_l' etc.
-  const mapped = CMD_MAP[shortKey];
-  if (!mapped) {
-    logDbg('Unknown shortKey: ' + shortKey);
-    return;
+/* --------------------------
+   Command building and sending
+   - For Shell: use precomputed 16-byte hex commands
+   - For Bburago: build 8-byte payload as described
+   -------------------------- */
+
+function buildCommandBytes(shortKey) {
+  const mode = protocolMode();
+  if (mode === 'bburago') {
+    // Build 8-byte plain payload per Bburago snippet:
+    // [0x01, forward, backward, left, right, lamp, turbo, 0x00]
+    const buf = new Uint8Array(8);
+    buf[0] = 0x01;
+    buf[1] = move.f ? 1 : 0;
+    buf[2] = move.b ? 1 : 0;
+    buf[3] = move.l ? 1 : 0;
+    buf[4] = move.r ? 1 : 0;
+    buf[5] = lights ? 1 : 0;
+    buf[6] = turbo ? 1 : 0;
+    buf[7] = 0x00;
+    return buf;
+  } else {
+    // Shell mode: map shortKey to full COMMAND_HEX via CMD_MAP
+    const mapped = CMD_MAP[shortKey];
+    if (!mapped) return hexToBytes16(COMMAND_HEX.idle);
+    const hex = COMMAND_HEX[mapped];
+    return hexToBytes16(hex);
   }
-  const hex = COMMAND_HEX[mapped];
-  if (!hex) { logDbg('No hex for ' + mapped); return; }
-  const bytes = hexToBytes(hex);
-  if (!bleControlChar) { logDbg('Control characteristic not ready'); return; }
+}
+
+/* send once (attempt writeWithoutResponse, fallback to writeValue) */
+async function writeCommandBytes(bytes) {
+  if (!bleControlChar) return;
   try {
-    // ensure it's a Uint8Array (some older browsers/implementations need DataView)
+    // bytes is Uint8Array
     await bleControlChar.writeValueWithoutResponse(bytes);
-    logDbg('Sent ' + shortKey + ' -> ' + mapped);
-  } catch (err) {
-    logDbg('writeValueWithoutResponse failed: ' + err + ' — trying writeValue() fallback');
+    dbg('Wrote without response: ' + Array.from(bytes).map(b=>b.toString(16).padStart(2,'0')).join(' '));
+  } catch (e) {
+    dbg('writeValueWithoutResponse failed: ' + e + ' — trying writeValue fallback');
     try {
-      await bleControlChar.writeValue(bytes); // fallback if device requires response
-      logDbg('Fallback writeValue succeeded for ' + shortKey);
-    } catch (err2) {
-      logDbg('Fallback writeValue failed: ' + err2);
-      // attempt reconnect
-      try { await reconnectDevice(); } catch (re) { logDbg('Reconnect after write failed: ' + re); }
+      await bleControlChar.writeValue(bytes);
+      dbg('Fallback writeValue succeeded');
+    } catch (e2) {
+      dbg('Fallback writeValue failed: ' + e2);
+      // attempt reconnect once
+      try { await reconnect(); } catch (rerr) { dbg('Reconnect failed after write error: ' + rerr); }
     }
   }
 }
 
-/* Decide shortKey from move + turbo (same mapping as before) */
-function decideCommandKeyNow() {
+/* streaming loop: decide key based on move flags + turbo, then send */
+function decideShortKey() {
   if (move.f && move.l) return turbo ? 'f_tl' : 'f_l';
   if (move.f && move.r) return turbo ? 'f_tr' : 'f_r';
   if (move.b && move.l) return turbo ? 'b_tl' : 'b_l';
@@ -400,117 +594,141 @@ function decideCommandKeyNow() {
   if (move.r) return 'r';
   return 'idle';
 }
+
+let streamTimer = null;
 function startStreaming() {
-  if (streamingTimer) clearInterval(streamingTimer);
-  streamingTimer = setInterval(() => {
-    const key = decideCommandKeyNow();
-    sendCommandNow(key);
+  if (streamTimer) clearInterval(streamTimer);
+  streamTimer = setInterval(async () => {
+    const key = decideShortKey();
+    const bytes = buildCommandBytes(key);
+    await writeCommandBytes(bytes);
     stateLabel.textContent = key.toUpperCase();
   }, STREAM_INTERVAL);
 }
-function stopStreaming() { if (streamingTimer) { clearInterval(streamingTimer); streamingTimer=null; } }
 
-/* --- Joystick implementation (touch + mouse) --- */
-function createStick(canvasId, role) {
-  const c = document.getElementById(canvasId);
-  const ctx = c.getContext('2d');
-  const w = c.width, h = c.height;
-  const center = { x:w/2, y:h/2 };
-  const maxR = Math.min(w,h)/2 * 0.6;
-  let knob = { x:center.x, y:center.y, r:Math.min(w,h)*0.11 };
-  let active = false;
-  let pointerId = null;
+function stopStreaming() {
+  if (streamTimer) clearInterval(streamTimer);
+  streamTimer = null;
+}
+
+/* --------------------------
+   Virtual joystick implementation
+   - Left = throttle (Y axis)
+   - Right = steering (X axis)
+   - Touch/mouse/pen via pointer events
+   - Visual knob animate via lerp for controller sync
+   -------------------------- */
+
+function createVirtualJoystick(canvasId, role) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const center = { x: w/2, y: h/2 };
+  const radius = Math.min(w,h)/2 * 0.65;
+  let knob = { x: center.x, y: center.y, r: Math.min(w,h)*0.12 };
+  let pointerId = null, active=false;
 
   function draw() {
     ctx.clearRect(0,0,w,h);
-    // ring
-    ctx.beginPath(); ctx.arc(center.x, center.y, maxR+8, 0, Math.PI*2);
+    // background ring
+    ctx.beginPath(); ctx.arc(center.x, center.y, radius+8, 0, Math.PI*2);
     ctx.fillStyle = "rgba(255,255,255,0.02)"; ctx.fill();
-    ctx.beginPath(); ctx.arc(center.x, center.y, maxR, 0, Math.PI*2);
-    ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth=2; ctx.stroke();
-    // knob
+    // inner ring
+    ctx.beginPath(); ctx.arc(center.x, center.y, radius, 0, Math.PI*2);
+    ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth = 2; ctx.stroke();
+    // knob shadow
+    ctx.beginPath(); ctx.arc(knob.x, knob.y, knob.r+6, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(2,6,23,0.4)"; ctx.fill();
+    // knob gradient
     const g = ctx.createLinearGradient(knob.x - knob.r, knob.y - knob.r, knob.x + knob.r, knob.y + knob.r);
-    g.addColorStop(0,'#0a84ff'); g.addColorStop(1,'#0570d9');
-    ctx.beginPath(); ctx.arc(knob.x, knob.y, knob.r, 0, Math.PI*2);
-    ctx.fillStyle = g; ctx.fill();
-    ctx.beginPath(); ctx.arc(knob.x - knob.r*0.25, knob.y - knob.r*0.25, knob.r*0.5, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(255,255,255,0.18)"; ctx.fill();
+    g.addColorStop(0, '#0a84ff'); g.addColorStop(1, '#0670d9');
+    ctx.beginPath(); ctx.arc(knob.x, knob.y, knob.r, 0, Math.PI*2); ctx.fillStyle = g; ctx.fill();
+    // inner shine
+    ctx.beginPath(); ctx.arc(knob.x - knob.r*0.24, knob.y - knob.r*0.24, knob.r*0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.fill();
   }
+
   draw();
 
+  // animate knob to target smoothly (for controller sync)
+  let animTarget = null, animating = false;
+  function animateTo(x,y) {
+    animTarget = { x,y };
+    if (!animating) tick();
+  }
+  function tick() {
+    animating = true;
+    if (!animTarget) { animating = false; return; }
+    knob.x += (animTarget.x - knob.x) * 0.22;
+    knob.y += (animTarget.y - knob.y) * 0.22;
+    draw();
+    if (Math.abs(knob.x - animTarget.x) + Math.abs(knob.y - animTarget.y) < 0.5) {
+      knob.x = animTarget.x; knob.y = animTarget.y; animTarget = null; animating = false; draw(); return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function resetKnob() { animateTo(center.x, center.y); }
+
   function handleMove(clientX, clientY) {
-    const rect = c.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const dx = clientX - rect.left - center.x;
     const dy = clientY - rect.top - center.y;
-    const dist = Math.min(Math.sqrt(dx*dx + dy*dy), maxR);
-    const ang = Math.atan2(dy,dx);
+    const dist = Math.min(Math.sqrt(dx*dx + dy*dy), radius);
+    const ang = Math.atan2(dy, dx);
     const nx = Math.cos(ang) * dist;
     const ny = Math.sin(ang) * dist;
-    knob.x = center.x + nx; knob.y = center.y + ny;
+    const px = center.x + nx, py = center.y + ny;
+    knob.x = px; knob.y = py; draw();
     // normalized -1..1
-    const vx = nx / maxR; const vy = ny / maxR;
-    // role: 'left' -> vy controls forward/reverse (up negative)
-    if (role === 'left') {
-      move.f = vy < -DEADZONE; move.b = vy > DEADZONE;
-    } else {
-      move.l = vx < -DEADZONE; move.r = vx > DEADZONE;
-    }
-    // immediate send so it feels responsive
-    const key = decideCommandKeyNow();
-    sendCommandNow(key);
+    const vx = nx / radius, vy = ny / radius;
+    if (role === 'left') { move.f = vy < -DEADZONE; move.b = vy > DEADZONE; }
+    else { move.l = vx < -DEADZONE; move.r = vx > DEADZONE; }
+    // immediate send for responsiveness
+    const key = decideShortKey();
+    writeCommandBytes(buildCommandBytes(key));
     stateLabel.textContent = key.toUpperCase();
-    draw();
   }
 
-  function reset() {
-    // animate knob to center smoothly
-    const targetX = center.x, targetY = center.y;
-    let anim = setInterval(() => {
-      knob.x += (targetX - knob.x) * 0.24;
-      knob.y += (targetY - knob.y) * 0.24;
-      draw();
-      if (Math.abs(knob.x-targetX) + Math.abs(knob.y-targetY) < 1) {
-        knob.x = targetX; knob.y = targetY; draw(); clearInterval(anim);
-      }
-    }, 16);
-    if (role === 'left') move.f = move.b = false; else move.l = move.r = false;
-    sendCommandNow(decideCommandKeyNow());
-  }
+  function onPointerDown(e) { e.preventDefault(); pointerId = e.pointerId; active = true; canvas.setPointerCapture(pointerId); handleMove(e.clientX, e.clientY); }
+  function onPointerMove(e) { if (!active || e.pointerId !== pointerId) return; handleMove(e.clientX, e.clientY); }
+  function onPointerUp(e) { if (e.pointerId !== pointerId) return; active = false; canvas.releasePointerCapture(pointerId); pointerId = null; resetKnob(); }
 
-  c.addEventListener('pointerdown', (ev) => {
-    active = true; pointerId = ev.pointerId; c.setPointerCapture(pointerId); handleMove(ev.clientX, ev.clientY);
-  });
-  c.addEventListener('pointermove', (ev) => { if (!active || ev.pointerId !== pointerId) return; handleMove(ev.clientX, ev.clientY); });
-  c.addEventListener('pointerup', (ev) => { if (ev.pointerId !== pointerId) return; active=false; c.releasePointerCapture(pointerId); pointerId=null; reset(); });
-  c.addEventListener('pointercancel', ()=> { active=false; pointerId=null; reset(); });
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
 
-  // expose a method to set axes visually (used by gamepad to sync visuals)
+  // expose method to set axes visually from controller (nx,ny in -1..1)
   function setAxes(nx, ny) {
-    // nx,ny in -1..1 range
-    knob.x = center.x + nx * maxR;
-    knob.y = center.y + ny * maxR;
-    draw();
+    const px = center.x + nx * radius;
+    const py = center.y + ny * radius;
+    animateTo(px, py);
   }
 
-  return { setAxes, reset };
+  return { setAxes, reset: resetKnob };
 }
 
-const leftStick = createStick('leftCanvas','left');
-const rightStick = createStick('rightCanvas','right');
+/* create both sticks */
+const leftStick = createVirtualJoystick('leftJoystick', 'left');
+const rightStick = createVirtualJoystick('rightJoystick', 'right');
 
-/* --- Gamepad polling & sync (visual) --- */
+/* --------------------------
+   Gamepad polling & sync
+   - map left stick Y -> throttle; right stick X -> steering
+   - sync visuals
+   -------------------------- */
 function pollGamepads() {
   const gps = navigator.getGamepads ? navigator.getGamepads() : [];
   const gp = gps[0];
   if (gp) {
-    // standard mapping: axes[0]=LX, axes[1]=LY, axes[2]=RX, axes[3]=RY
     const lx = gp.axes[0] || 0;
     const ly = gp.axes[1] || 0;
     const rx = gp.axes[2] || 0;
-    // sync visuals: leftStick (x,y), rightStick (x,0)
-    leftStick.setAxes(lx, ly);   // left stick visual matches controller
+    // set visuals: left stick (lx, ly), right stick (rx, 0)
+    leftStick.setAxes(lx, ly);
     rightStick.setAxes(rx, 0);
-    // update movement flags
+    // set flags
     move.f = ly < -DEADZONE; move.b = ly > DEADZONE;
     move.l = rx < -DEADZONE; move.r = rx > DEADZONE;
     // buttons: left bumper (4) turbo hold, right bumper (5) toggle lights on press
@@ -518,28 +736,95 @@ function pollGamepads() {
     const rb = !!(gp.buttons[5] && gp.buttons[5].pressed);
     turbo = lb;
     turboBtn.classList.toggle('active', turbo);
-    // toggle lights on rising edge
-    if (rb && !lightsPressedPrev) { lights = !lights; lightsBtn.classList.toggle('active', lights); logDbg('Lights toggled by controller -> ' + lights); }
+    if (rb && !lightsPressedPrev) { lights = !lights; lightsBtn.classList.toggle('active', lights); dbg('Lights toggled by controller -> ' + lights); }
     lightsPressedPrev = rb;
-    // send immediate
-    const k = decideCommandKeyNow();
-    sendCommandNow(k);
-    stateLabel.textContent = k.toUpperCase();
+    // immediate send
+    const key = decideShortKey();
+    writeCommandBytes(buildCommandBytes(key));
+    stateLabel.textContent = key.toUpperCase();
   }
   requestAnimationFrame(pollGamepads);
 }
 let lightsPressedPrev = false;
 pollGamepads();
 
-/* --- Buttons --- */
-turboBtn.addEventListener('click', ()=> { turbo = !turbo; turboBtn.classList.toggle('active', turbo); logDbg('Turbo ' + turbo); });
-lightsBtn.addEventListener('click', ()=> { lights = !lights; lightsBtn.classList.toggle('active', lights); logDbg('Lights ' + lights); });
+/* --------------------------
+   Turbo & Lights UI
+   -------------------------- */
+turboBtn.addEventListener('click', () => {
+  turbo = !turbo;
+  turboBtn.classList.toggle('active', turbo);
+  dbg('Turbo ' + (turbo ? 'ON' : 'OFF'));
+});
+lightsBtn.addEventListener('click', () => {
+  lights = !lights;
+  lightsBtn.classList.toggle('active', lights);
+  dbg('Lights ' + (lights ? 'ON' : 'OFF'));
+});
 
-/* --- Cleanup on page unload --- */
-window.addEventListener('unload', () => { if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) bleDevice.gatt.disconnect(); });
+/* --------------------------
+   Start/stop streaming control
+   -------------------------- */
+function startStreamingLoop() {
+  if (streamingHandle) clearInterval(streamingHandle);
+  streamingHandle = setInterval(() => {
+    const key = decideShortKey();
+    const bytes = buildCommandBytes(key);
+    writeCommandBytes(bytes);
+    stateLabel.textContent = key.toUpperCase();
+  }, STREAM_INTERVAL);
+}
+function stopStreamingLoop() { if (streamingHandle) { clearInterval(streamingHandle); streamingHandle = null; } }
 
-/* --- initial debug lines --- */
-logDbg('Client ready — press Connect to pair with QCAR device.');
+/* --------------------------
+   UI connect button binding
+   -------------------------- */
+connectBtn.addEventListener('click', async () => {
+  try {
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'Pairing...';
+    await connectToCar();
+    startStreamingLoop();
+    connectBtn.textContent = 'Connected';
+  } catch (e) {
+    dbg('Connect failed: ' + (e.message || e));
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect';
+  }
+});
+
+/* --------------------------
+   Helper: hex->Uint8Array 16 bytes
+   -------------------------- */
+function hexToBytes16(hex) {
+  const a = new Uint8Array(16);
+  for (let i=0;i<16;i++) a[i] = parseInt(hex.substr(i*2,2),16);
+  return a;
+}
+
+/* --------------------------
+   Expose a few functions & initial debug
+   -------------------------- */
+dbg('App initialized — choose protocol, press Connect');
+dbgConn.textContent = 'no';
+dbgVeh.textContent = '--';
+
+/* --------------------------
+   Debug panel collapse toggle
+   -------------------------- */
+dbgToggle.addEventListener('click', () => {
+  const d = document.getElementById('debugPanel');
+  if (d.style.height && d.style.height !== '') {
+    d.style.height = ''; dbgToggle.textContent = 'Collapse';
+  } else {
+    d.style.height = '44px'; dbgToggle.textContent = 'Expand';
+  }
+});
+
+/* ===========================
+   End of script
+   =========================== */
+
 </script>
 </body>
 </html>
