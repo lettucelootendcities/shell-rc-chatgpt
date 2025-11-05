@@ -1,5 +1,5 @@
 # shell-rc-chatgpt
-A web app used to control Shell RC cars. Right now supports only the old cars, written by ChatGPT.
+A web app used to control Shell RC cars. Right now supports only the old cars, new version in beta, written by ChatGPT
 
 # Look
 <img width="985" height="348" alt="Screenshot_20251105_182332" src="https://github.com/user-attachments/assets/df07b030-a58a-4c73-8df8-3e632604e809" />
