@@ -83,8 +83,8 @@
         <div class="proto">
           <label for="protocol">Protocol</label>
           <select id="protocol" style="padding:8px;border-radius:8px;background:transparent;color:inherit;border:1px solid rgba(255,255,255,0.03)">
-            <option value="shell">Shell (encrypted)</option>
-            <option value="bburago">Bburago (simple)</option>
+            <option value="shell">old cars</option>
+            <option value="bburago">new cars (simple)</option>
           </select>
         </div>
         <button id="connectBtn" class="connect glow">Connect</button>
@@ -104,7 +104,7 @@
         <div class="batteryBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
           <div id="batteryFill" class="batteryFill"></div>
         </div>
-        <div class="muted">Battery decoding depends on protocol: Shell (AES) or Bburago (raw % byte).</div>
+        <div class="muted">  </div>
       </div>
 
       <div>
@@ -112,26 +112,26 @@
         <div id="stateLabel" style="font-weight:900;font-size:16px;margin-top:6px">Idle</div>
       </div>
 
-      <div style="margin-top:auto" class="muted">Notes: Use Chrome/Brave on desktop, Safari on iOS. Web Bluetooth requires HTTPS or localhost.</div>
+      <div style="margin-top:auto" class="muted">   </div>
     </div>
 
     <!-- RIGHT: Joysticks + Controls -->
     <div class="right">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div class="muted">Dual joysticks • controller supported • deadzone 0.2</div>
+        <div class="muted">   </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <div id="modeBadge" class="badge">Mode: Shell</div>
+          <div id="modeBadge" class="badge">   </div>
         </div>
       </div>
 
       <div class="joysticks">
         <div class="stickWrap">
-          <div class="stickTitle">Throttle (Left)</div>
+          <div class="stickTitle">Throttle</div>
           <canvas id="leftJoystick" width="220" height="220"></canvas>
         </div>
 
         <div class="stickWrap">
-          <div class="stickTitle">Steering (Right)</div>
+          <div class="stickTitle">Steering</div>
           <canvas id="rightJoystick" width="220" height="220"></canvas>
         </div>
       </div>
@@ -414,7 +414,7 @@ async function connectToCar() {
     // Ask for either QCAR or SL-* depending on mode to simplify selection
     const nameFilter = mode === 'shell' ? { namePrefix: 'QCAR' } : { namePrefix: 'SL-' };
     const device = await navigator.bluetooth.requestDevice({
-      filters: [ nameFilter ],
+      acceptAllDevices: true,
       optionalServices: [ SERVICE_UUID, '0000180f-0000-1000-8000-00805f9b34fb' ]
     });
     bleDevice = device;
