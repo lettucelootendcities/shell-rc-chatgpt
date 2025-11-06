@@ -13,6 +13,11 @@ A web app used to control Shell RC cars. Right now supports only the old cars, w
 - Battery reading
 - Debug console
 
+# Instructions (on chromium based browsers)
+1. Go to chrome://flags
+2. Enable Bluetooth WebAPI
+3. Enjoy!
+
 # Roadmap (kinda empty)
 - new cars suppurt
 - android and maybe iOS support
